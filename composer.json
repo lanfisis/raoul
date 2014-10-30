@@ -1,0 +1,22 @@
+
+{
+    "name": "lanfisis/raoul",
+    "type": "library",
+    "description": "A library to generate php class from a WSDL",
+    "keywords": ["generator"],
+    "homepage": "https://github.com/lanfisis/raoul",
+    "license": "WTFPL",
+    "authors": [
+        {
+            "name": "David Buros",
+            "email": "david.buros@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.4.0",
+        "lanfisis/raoul": "master"
+    },
+    "autoload": {
+        "psr-0": { "Raoul": "src/" }
+    }
+}
