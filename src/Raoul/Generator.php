@@ -220,7 +220,7 @@ class Generator
      */
     public function setNamespace($namespace)
     {
-        $this->namespace = (string)$namespace;
+        $this->namespace = (string) $namespace;
         return $this;
     }
 
@@ -251,12 +251,14 @@ class Generator
     /**
      * Define if we need to generate child class
      *
+     * @param null $status Status
+     *
      * @return boolean
      */
     public function hasOverwrite($status = null)
     {
         $this->overwrite = $status !== null ? $status : $this->overwrite;
-        return $this->overwrite ;
+        return $this->overwrite;
     }
 
     /**
@@ -283,8 +285,9 @@ class Generator
     }
 
     /**
+     * Generate
      *
-     * @param type $bootstrap
+     * @param boolean $bootstrap Boostrap
      *
      * @return \Raoul\Generator|boolean
      */
@@ -385,6 +388,10 @@ class Generator
                 $parent->setNamespace($namespace.'\Base');
                 $parent->setDocblock($this->getDocBlock('Parent model for '.ucfirst($name)));
                 $parent->isAbstract(true);
+
+                $this->addConstructFromDefinition(isset($parent)?$parent:$class, $definition, true);
+                $this->addMethodsFromDefinition(isset($parent)?$parent:$class, $definition, true);
+
                 $classes[] = $parent;
 
                 $class->addUse($namespace.'\Base\\'.ucfirst($name), ucfirst($name).'Base');
@@ -392,8 +399,8 @@ class Generator
             }
 
             $this->addParamsFromDefinition(isset($parent)?$parent:$class, $definition);
-            $this->addConstructFromDefinition(isset($parent)?$parent:$class, $definition);
-            $this->addMethodsFromDefinition(isset($parent)?$parent:$class, $definition);
+            $this->addConstructFromDefinition($class, $definition);
+            $this->addMethodsFromDefinition($class, $definition);
             $this->addElement($name, $class);
             $classes[] = $class;
         }
@@ -426,6 +433,7 @@ class Generator
             $parent->setDocblock($this->getDocBlock('Parent model for proxy for '.$name.' service'));
             $parent->setExtends('\SoapClient');
             $parent->isAbstract(true);
+            $this->addServicesFromDefinition($parent, $definition, true);
             $classes[] = $parent;
 
             $class->addUse($namespace.'\Base\\'.$name, $name.'Base');
@@ -434,7 +442,7 @@ class Generator
 
         $this->addParamsForService(isset($parent)?$parent:$class);
         $this->addConstructForService(isset($parent)?$parent:$class);
-        $this->addServicesFromDefinition(isset($parent)?$parent:$class, $definition);
+        $this->addServicesFromDefinition($class, $definition);
 
         $classes[] = $class;
         return $classes;
@@ -511,7 +519,16 @@ class Generator
         return $this;
     }
 
-    protected function addServicesFromDefinition(Classes $class, $definition)
+    /**
+     * Add services as method
+     *
+     * @param Deflection\Element\Classes $class      Current class
+     * @param array                      $definition Service definition
+     * @param boolean                    $base       Is a base model
+     *
+     * @return \Raoul\Generator
+     */
+    protected function addServicesFromDefinition(Classes $class, $definition, $base = false)
     {
         foreach ($definition as $method => $infos) {
             $docblock = new Docblock();
@@ -523,7 +540,7 @@ class Generator
             $function = new Functions();
             $function->setDocblock($docblock);
             $function->isPublic(true);
-            $function->setName(lcfirst($method));
+            $function->setName((($this->hasOverwrite() and $base)?'_':'').lcfirst($method));
             $params = array();
 
             foreach ($infos['inputs'] as $name => $type) {
@@ -533,10 +550,12 @@ class Generator
                 $function->addParam($name, $this->getArgType($type->getName()));
                 $params[] = '$'.$name;
             }
-            $content = array(
-                'return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'
-            );
-            $function->setContent($content);
+
+            if ($this->hasOverwrite() and !$base) {
+                $function->setContent(array('return $this->_'.lcfirst($method).'('.implode(',', $params).');'));
+            } else {
+                $function->setContent(array('return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'));
+            }
             $class->addFunction($function);
         }
         return $this;
@@ -581,10 +600,11 @@ class Generator
      *
      * @param Deflection\Element\Classes $class      Current class
      * @param array                      $definition Param definition
+     * @param boolean                    $base       Is a base model
      *
      * @return \Raoul\Generator
      */
-    protected function addConstructFromDefinition(Classes $class, $definition)
+    protected function addConstructFromDefinition(Classes $class, $definition, $base = false)
     {
         if (count($definition['mandatory']) > 0) {
             $content = array();
@@ -594,12 +614,17 @@ class Generator
             $function = new Functions();
             $function->setDocblock($docblock);
             $function->isPublic(true);
-            $function->setName('__construct');
+            $function->setName(($this->hasOverwrite() and $base) ? '_construct' : '__construct');
             foreach ($definition['mandatory'] as $name => $infos) {
                 $docblock->addParam('return', 'void');
                 $docblock->addVar($name, $this->getType($infos['type'], $class->getNamespace()), 'Value of '.$name);
                 $function->addParam($name.' = null', $this->getArgType($infos['type'], $class->getNamespace()));
-                $content[] = '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $'.$name.';';
+                if ($this->hasOverwrite() and $base) {
+                    $content[] = '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $'.$name.';';
+                }
+            }
+            if ($this->hasOverwrite() and !$base) {
+                $content[] = '$this->_construct($'.implode(', $', array_keys($definition['mandatory'])).');';
             }
             $function->setContent($content);
             $class->addFunction($function);
@@ -612,14 +637,15 @@ class Generator
      *
      * @param Deflection\Element\Classes $class      Current class
      * @param array                      $definition Param definition
+     * @param boolean                    $base       Is a base model
      *
      * @return \Raoul\Generator
      */
-    protected function addMethodsFromDefinition(Classes $class, $definition)
+    protected function addMethodsFromDefinition(Classes $class, $definition, $base = false)
     {
         foreach ($definition['all'] as $name => $infos) {
             foreach (array('get', 'set') as $type) {
-                $method = $type.ucfirst($name);
+                $method = (($this->hasOverwrite() and $base)?'_':'').$type.ucfirst($name);
                 $description = ucfirst($type).' '.$name;
                 $docblock = new Docblock();
 
@@ -638,16 +664,24 @@ class Generator
                         'value'.($infos['nullable'] === true ? ' = null' : ''),
                         $this->getArgType($infos['type'], $class->getNamespace())
                     );
-                    $function->setContent(array(
-                        '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $value;',
-                        'return $this;',
-                    ));
+                    $function->setContent(
+                        ($this->hasOverwrite() and !$base)?
+                        array(
+                            'return $this->_'.$method.'($value);',
+                        ):
+                        array(
+                            '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $value;',
+                            'return $this;',
+                        )
+                    );
                 } else {
                     $docblock->setDescription($description);
                     $docblock->addParam('return', $this->getType($infos['type'], $class->getNamespace()));
-                    $function->setContent(array(
-                        'return $this->'.$name.';',
-                    ));
+                    $function->setContent(
+                        ($this->hasOverwrite() and !$base)?
+                        array('return $this->_'.$method.'();'):
+                        array('return $this->'.$name.';')
+                    );
                 }
 
                 $class->addFunction($function);
