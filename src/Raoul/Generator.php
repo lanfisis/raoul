@@ -22,6 +22,13 @@ use Deflection\Generator as ClassGenerator;
 class Generator
 {
     /**
+     * Import pattern
+     *
+     * @const IMPORT_PATTERN
+     */
+    const IMPORT_PATTERN = '//wsdl:import/@location';
+
+    /**
      * WDSL to work with
      *
      * @var string
@@ -220,7 +227,7 @@ class Generator
      */
     public function setNamespace($namespace)
     {
-        $this->namespace = (string) $namespace;
+        $this->namespace = (string)$namespace;
         return $this;
     }
 
@@ -251,14 +258,12 @@ class Generator
     /**
      * Define if we need to generate child class
      *
-     * @param null $status Status
-     *
      * @return boolean
      */
     public function hasOverwrite($status = null)
     {
         $this->overwrite = $status !== null ? $status : $this->overwrite;
-        return $this->overwrite;
+        return $this->overwrite ;
     }
 
     /**
@@ -285,9 +290,8 @@ class Generator
     }
 
     /**
-     * Generate
      *
-     * @param boolean $bootstrap Boostrap
+     * @param type $bootstrap
      *
      * @return \Raoul\Generator|boolean
      */
@@ -297,25 +301,54 @@ class Generator
             return false;
         }
 
+        $elements = $operations = array();
+        $documents = $this->getDocuments($this->wsdl);
+        foreach ($documents as $document) {
+            $elements = $this->extractElements($document, $elements);
+            $operations = $this->extractOperations($document);
+        }
+
         $service = $this->getService();
-        $document = new DOMDocument();
-        $document->load($this->wsdl);
+        if (!empty($elements) && !empty($operations)) {
+            $types = $this->getTypesDefinitionsFromElements($elements);
+            $classes = $this->getTypeClassesFromDefinitions($types, $service.'\Type');
+            $this->createFilesFromClasses($classes);
 
-        $elements = $this->extractElements($document);
-        $types = $this->getTypesDefinitionsFromElements($elements);
-        $classes = $this->getTypeClassesFromDefinitions($types, $service.'\Type');
-        $this->createFilesFromClasses($classes);
-
-        $operations = $this->extractOperations($document);
-        $methods = $this->getMethodsDefinitionsFromOperations($operations);
-        $services = $this->getServiceClassesFromDefinitions($methods, $service);
-        $this->createFilesFromClasses($services);
+            $methods = $this->getMethodsDefinitionsFromOperations($operations);
+            $services = $this->getServiceClassesFromDefinitions($methods, $service);
+            $this->createFilesFromClasses($services);
+        }
 
         if ($bootstrap) {
             $this->generateBoostrap($service);
         }
 
         return $this;
+    }
+
+    /**
+     * Returns all document to workd with by recursive inspeection
+     *
+     * @param string $wsdl Path to WSDL to retrives documents from
+     *
+     * @return array
+     */
+    protected function getDocuments($wsdl)
+    {
+        $explore = function ($wsdl, array $documents = array()) use (&$explore) {
+            $doc = new DOMDocument();
+            $doc->load($wsdl);
+            $documents[] = $doc;
+            $xpath = new DOMXPath($doc);
+            foreach ($xpath->query(self::IMPORT_PATTERN) as $reference) {
+                $url = filter_var($reference->value, FILTER_VALIDATE_URL) === false
+                    ? dirname($wsdl).'/'.$reference->value
+                    : $reference->value;
+                $documents = $explore($url, $documents);
+            }
+            return $documents;
+        };
+        return $explore($wsdl);
     }
 
     /**
@@ -388,10 +421,6 @@ class Generator
                 $parent->setNamespace($namespace.'\Base');
                 $parent->setDocblock($this->getDocBlock('Parent model for '.ucfirst($name)));
                 $parent->isAbstract(true);
-
-                $this->addConstructFromDefinition(isset($parent)?$parent:$class, $definition, true);
-                $this->addMethodsFromDefinition(isset($parent)?$parent:$class, $definition, true);
-
                 $classes[] = $parent;
 
                 $class->addUse($namespace.'\Base\\'.ucfirst($name), ucfirst($name).'Base');
@@ -399,8 +428,8 @@ class Generator
             }
 
             $this->addParamsFromDefinition(isset($parent)?$parent:$class, $definition);
-            $this->addConstructFromDefinition($class, $definition);
-            $this->addMethodsFromDefinition($class, $definition);
+            $this->addConstructFromDefinition(isset($parent)?$parent:$class, $definition);
+            $this->addMethodsFromDefinition(isset($parent)?$parent:$class, $definition);
             $this->addElement($name, $class);
             $classes[] = $class;
         }
@@ -433,7 +462,6 @@ class Generator
             $parent->setDocblock($this->getDocBlock('Parent model for proxy for '.$name.' service'));
             $parent->setExtends('\SoapClient');
             $parent->isAbstract(true);
-            $this->addServicesFromDefinition($parent, $definition, true);
             $classes[] = $parent;
 
             $class->addUse($namespace.'\Base\\'.$name, $name.'Base');
@@ -442,7 +470,7 @@ class Generator
 
         $this->addParamsForService(isset($parent)?$parent:$class);
         $this->addConstructForService(isset($parent)?$parent:$class);
-        $this->addServicesFromDefinition($class, $definition);
+        $this->addServicesFromDefinition(isset($parent)?$parent:$class, $definition);
 
         $classes[] = $class;
         return $classes;
@@ -519,16 +547,7 @@ class Generator
         return $this;
     }
 
-    /**
-     * Add services as method
-     *
-     * @param Deflection\Element\Classes $class      Current class
-     * @param array                      $definition Service definition
-     * @param boolean                    $base       Is a base model
-     *
-     * @return \Raoul\Generator
-     */
-    protected function addServicesFromDefinition(Classes $class, $definition, $base = false)
+    protected function addServicesFromDefinition(Classes $class, $definition)
     {
         foreach ($definition as $method => $infos) {
             $docblock = new Docblock();
@@ -540,7 +559,7 @@ class Generator
             $function = new Functions();
             $function->setDocblock($docblock);
             $function->isPublic(true);
-            $function->setName((($this->hasOverwrite() and $base)?'_':'').lcfirst($method));
+            $function->setName(lcfirst($method));
             $params = array();
 
             foreach ($infos['inputs'] as $name => $type) {
@@ -550,12 +569,10 @@ class Generator
                 $function->addParam($name, $this->getArgType($type->getName()));
                 $params[] = '$'.$name;
             }
-
-            if ($this->hasOverwrite() and !$base) {
-                $function->setContent(array('return $this->_'.lcfirst($method).'('.implode(',', $params).');'));
-            } else {
-                $function->setContent(array('return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'));
-            }
+            $content = array(
+                'return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'
+            );
+            $function->setContent($content);
             $class->addFunction($function);
         }
         return $this;
@@ -572,6 +589,9 @@ class Generator
      */
     protected function addParamsFromDefinition(Classes $class, $definition)
     {
+        if (!isset($definition['all'])) {
+            return $this;
+        }
         foreach ($definition['all'] as $name => $infos) {
             $param = new Param();
             $docblock = new Docblock();
@@ -600,12 +620,14 @@ class Generator
      *
      * @param Deflection\Element\Classes $class      Current class
      * @param array                      $definition Param definition
-     * @param boolean                    $base       Is a base model
      *
      * @return \Raoul\Generator
      */
-    protected function addConstructFromDefinition(Classes $class, $definition, $base = false)
+    protected function addConstructFromDefinition(Classes $class, $definition)
     {
+        if (!isset($definition['mandatory'])) {
+            return $this;
+        }
         if (count($definition['mandatory']) > 0) {
             $content = array();
             $docblock = new Docblock();
@@ -614,17 +636,12 @@ class Generator
             $function = new Functions();
             $function->setDocblock($docblock);
             $function->isPublic(true);
-            $function->setName(($this->hasOverwrite() and $base) ? '_construct' : '__construct');
+            $function->setName('__construct');
             foreach ($definition['mandatory'] as $name => $infos) {
                 $docblock->addParam('return', 'void');
                 $docblock->addVar($name, $this->getType($infos['type'], $class->getNamespace()), 'Value of '.$name);
                 $function->addParam($name.' = null', $this->getArgType($infos['type'], $class->getNamespace()));
-                if ($this->hasOverwrite() and $base) {
-                    $content[] = '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $'.$name.';';
-                }
-            }
-            if ($this->hasOverwrite() and !$base) {
-                $content[] = '$this->_construct($'.implode(', $', array_keys($definition['mandatory'])).');';
+                $content[] = '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $'.$name.';';
             }
             $function->setContent($content);
             $class->addFunction($function);
@@ -637,15 +654,17 @@ class Generator
      *
      * @param Deflection\Element\Classes $class      Current class
      * @param array                      $definition Param definition
-     * @param boolean                    $base       Is a base model
      *
      * @return \Raoul\Generator
      */
-    protected function addMethodsFromDefinition(Classes $class, $definition, $base = false)
+    protected function addMethodsFromDefinition(Classes $class, $definition)
     {
+        if (!isset($definition['all'])) {
+            return $this;
+        }
         foreach ($definition['all'] as $name => $infos) {
             foreach (array('get', 'set') as $type) {
-                $method = (($this->hasOverwrite() and $base)?'_':'').$type.ucfirst($name);
+                $method = $type.ucfirst($name);
                 $description = ucfirst($type).' '.$name;
                 $docblock = new Docblock();
 
@@ -664,24 +683,16 @@ class Generator
                         'value'.($infos['nullable'] === true ? ' = null' : ''),
                         $this->getArgType($infos['type'], $class->getNamespace())
                     );
-                    $function->setContent(
-                        ($this->hasOverwrite() and !$base)?
-                        array(
-                            'return $this->_'.$method.'($value);',
-                        ):
-                        array(
-                            '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $value;',
-                            'return $this;',
-                        )
-                    );
+                    $function->setContent(array(
+                        '$this->'.$name.($infos['collection'] === true ? '[]' : '').' = $value;',
+                        'return $this;',
+                    ));
                 } else {
                     $docblock->setDescription($description);
                     $docblock->addParam('return', $this->getType($infos['type'], $class->getNamespace()));
-                    $function->setContent(
-                        ($this->hasOverwrite() and !$base)?
-                        array('return $this->_'.$method.'();'):
-                        array('return $this->'.$name.';')
-                    );
+                    $function->setContent(array(
+                        'return $this->'.$name.';',
+                    ));
                 }
 
                 $class->addFunction($function);
@@ -709,12 +720,12 @@ class Generator
      * Returns element from wsdl as DOMElement
      *
      * @param DOMDocument $document WSDl as XML Document
+     * @param array       $elements Previous elements
      *
      * @return array
      */
-    protected function extractElements(DOMDocument $document)
+    protected function extractElements(DOMDocument $document, array $elements = array())
     {
-        $elements = array();
         $complexType = $document->getElementsByTagName('complexType');
         foreach ($complexType as $element) {
             if ($element->getAttribute('name') === '') {
@@ -729,12 +740,12 @@ class Generator
      * Returns services wsdl as DOMElement
      *
      * @param DOMDocument $document WSDl as XML Document
+     * @param array       $elements Previous elements
      *
      * @return array
      */
-    protected function extractOperations(DOMDocument $document)
+    protected function extractOperations(DOMDocument $document, array $elements = array())
     {
-        $elements = array();
         $xpath = new DOMXpath($document);
         $operations = $xpath->query("/*/wsdl:portType/wsdl:operation");
         foreach ($operations as $operation) {
@@ -880,7 +891,7 @@ class Generator
             case 'dateTime':
                 return 'string';
             default:
-                return $namespace ? $namespace.'\\'.$type : $type;
+                return $namespace ? '\\'.$namespace.'\\'.$type : $type;
         }
     }
 
