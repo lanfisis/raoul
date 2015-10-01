@@ -88,6 +88,13 @@ class Generator
     protected $paths = array();
 
     /**
+     * All simple type classes
+     *
+     * @var array
+     */
+    protected $simpleTypeCLass = array();
+
+    /**
      * Contructor!
      *
      * @param string $wsdl    WSDL
@@ -466,11 +473,16 @@ class Generator
 
             $class->addUse($namespace.'\Base\\'.$name, $name.'Base');
             $class->setExtends($name.'Base');
-        }
 
-        $this->addParamsForService(isset($parent)?$parent:$class);
-        $this->addConstructForService(isset($parent)?$parent:$class);
-        $this->addServicesFromDefinition(isset($parent)?$parent:$class, $definition);
+            $this->addParamsForService($parent);
+            $this->addConstructForService($parent);
+            $this->addServicesFromDefinition($parent, $definition, false);
+            $this->addServicesFromDefinition($class, $definition, true);
+        } else {
+            $this->addParamsForService($class);
+            $this->addConstructForService($class);
+            $this->addServicesFromDefinition($class, $definition);
+        }
 
         $classes[] = $class;
         return $classes;
@@ -547,7 +559,7 @@ class Generator
         return $this;
     }
 
-    protected function addServicesFromDefinition(Classes $class, $definition)
+    protected function addServicesFromDefinition(Classes $class, $definition, $isChild = null)
     {
         foreach ($definition as $method => $infos) {
             $docblock = new Docblock();
@@ -556,22 +568,47 @@ class Generator
 
             $docblock->addParam('return', $this->getType($return->getName(), $return->getNamespace()));
 
+            $methodName = ($isChild === false ? '_' : '').lcfirst($method);
             $function = new Functions();
             $function->setDocblock($docblock);
             $function->isPublic(true);
-            $function->setName(lcfirst($method));
-            $params = array();
+            $function->setName($methodName);
+            $params = $simpleParams = $inputs = array();
 
             foreach ($infos['inputs'] as $name => $type) {
-                $type = $this->getElement($type);
-                $docblock->addVar($name, $this->getType($type->getName(), $type->getNamespace()), 'Value of '.$name);
-                $class->addUse($this->getType($type->getName(), $type->getNamespace()));
-                $function->addParam($name, $this->getArgType($type->getName()));
-                $params[] = '$'.$name;
+                $classType = $this->getElement($type);
+                if (isset($this->simpleTypeCLass[$classType->getName()]) && $isChild === true) {
+                    $requestModel = $classType->getName();
+                    $class->addUse($this->getType($classType->getName(), $classType->getNamespace()));
+                    foreach ($this->simpleTypeCLass[$classType->getName()] as $subname => $subtype) {
+                        $docblock->addVar($subname, $subtype, 'Value of '.$subname);
+                        $function->addParam($subname);
+                        $simpleParams[] = '$'.$subname;
+                    }
+                } else {
+                    $docblock->addVar($name, $this->getType($classType->getName(), $classType->getNamespace()), 'Value of '.$name);
+                    $class->addUse($this->getType($classType->getName(), $classType->getNamespace()));
+                    $function->addParam($name, $this->getArgType($classType->getName()));
+                    $params[] = '$'.$name;
+                }
             }
-            $content = array(
-                'return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'
-            );
+            $childBody = count($simpleParams) > 0
+                ? array (
+                    '$request = new '.$requestModel.'('.implode(', ', $simpleParams).');',
+                    'return parent::_'.$methodName.'($request);',
+                )
+                : array (
+                    '$response = parent::_'.$methodName.'('.implode(', ', $params).');',
+                    '/** Overide $response to retrive datas if $response is a complex object */',
+                    'return $response;',
+                );
+
+            $content = $isChild === true
+                ? $childBody
+                : array (
+                        'return $this->__soapCall("'.$method.'", array('.implode(',', $params).'));'
+                );
+
             $function->setContent($content);
             $class->addFunction($function);
         }
@@ -589,9 +626,13 @@ class Generator
      */
     protected function addParamsFromDefinition(Classes $class, $definition)
     {
+
         if (!isset($definition['all'])) {
             return $this;
         }
+        $allSimple = true;
+        $params = array();
+
         foreach ($definition['all'] as $name => $infos) {
             $param = new Param();
             $docblock = new Docblock();
@@ -604,14 +645,27 @@ class Generator
                 $param->setValue('array()');
             }
 
+            $type = $this->getType($infos['type'], $class->getNamespace());
             $docblock->setDescription($description);
-            $docblock->addParam('var', $this->getType($infos['type'], $class->getNamespace()));
+            $docblock->addParam('var', $type);
 
             $param->setName($name);
             $param->isPublic();
             $param->setDocblock($docblock);
             $class->addParam($param);
+
+
+            if (!$this->isSImpleType($type)) {
+                $allSimple = false;
+            } else {
+                $params[$name] = $type;
+            }
+
         }
+        if ($allSimple) {
+            $this->simpleTypeCLass[$class->getName()] = $params;
+        }
+
         return $this;
     }
 
@@ -625,10 +679,10 @@ class Generator
      */
     protected function addConstructFromDefinition(Classes $class, $definition)
     {
-        if (!isset($definition['mandatory'])) {
+        if (!isset($definition['all'])) {
             return $this;
         }
-        if (count($definition['mandatory']) > 0) {
+        if (count($definition['all']) > 0) {
             $content = array();
             $docblock = new Docblock();
             $docblock->setDescription('Construct '.$class->getName());
@@ -637,7 +691,7 @@ class Generator
             $function->setDocblock($docblock);
             $function->isPublic(true);
             $function->setName('__construct');
-            foreach ($definition['mandatory'] as $name => $infos) {
+            foreach ($definition['all'] as $name => $infos) {
                 $docblock->addParam('return', 'void');
                 $docblock->addVar($name, $this->getType($infos['type'], $class->getNamespace()), 'Value of '.$name);
                 $function->addParam($name.' = null', $this->getArgType($infos['type'], $class->getNamespace()));
@@ -892,6 +946,29 @@ class Generator
                 return 'string';
             default:
                 return $namespace ? '\\'.$namespace.'\\'.$type : $type;
+        }
+    }
+
+    /**
+     * Returns if it's a simple type
+     *
+     * @param string $type Actual type
+     *
+     * @return boolean
+     */
+    protected function isSImpleType($type)
+    {
+        switch ($type) {
+            case 'int':
+            case 'string':
+            case 'array':
+            case 'boolean':
+            case 'int':
+            case 'float':
+            case 'date':
+                return true;
+            default:
+                return false;
         }
     }
 
