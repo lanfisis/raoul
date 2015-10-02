@@ -430,7 +430,7 @@ class Generator
                 $parent->isAbstract(true);
                 $classes[] = $parent;
 
-                $class->addUse($namespace.'\Base\\'.ucfirst($name), ucfirst($name).'Base');
+                $class->addUse('\\'.$namespace.'\Base\\'.ucfirst($name), ucfirst($name).'Base');
                 $class->setExtends($name.'Base');
             }
 
@@ -471,7 +471,7 @@ class Generator
             $parent->isAbstract(true);
             $classes[] = $parent;
 
-            $class->addUse($namespace.'\Base\\'.$name, $name.'Base');
+            $class->addUse('\\'.$namespace.'\Base\\'.$name, $name.'Base');
             $class->setExtends($name.'Base');
 
             $this->addParamsForService($parent);
@@ -599,7 +599,6 @@ class Generator
                 )
                 : array (
                     '$response = parent::_'.$methodName.'('.implode(', ', $params).');',
-                    '/** Overide $response to retrive datas if $response is a complex object */',
                     'return $response;',
                 );
 
@@ -731,7 +730,7 @@ class Generator
                     $method = ($infos['collection'] === true) ? 'add'.ucfirst($name) : $method;
                     $description = ($infos['collection'] === true) ? 'Add element on '.$name.' collection' : $description;
                     $docblock->setDescription($description);
-                    $docblock->addParam('return', $class->getNamespace().'\\'.$class->getName());
+                    $docblock->addParam('return', '\\'.$class->getNamespace().'\\'.$class->getName());
                     $docblock->addVar('value', $this->getType($infos['type'], $class->getNamespace()), $name);
                     $function->addParam(
                         'value'.($infos['nullable'] === true ? ' = null' : ''),
