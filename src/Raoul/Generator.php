@@ -417,6 +417,12 @@ class Generator
         $classes = array();
         $namespace = ($this->getNamespace() ? $this->getNamespace().'\\' : '').$namespace;
         foreach ($definitions as $name => $definition) {
+            if (isset($definition['extends']) && isset($definitions[$definition['extends']])) {
+                $extends = $definition['extends'];
+                unset($definition['extends']);
+                $definition = array_merge_recursive($definition, $definitions[$extends]);
+            }
+
             $class = new Classes();
             $class->setName(ucfirst($name));
             $class->setNamespace($namespace);
@@ -583,7 +589,7 @@ class Generator
                     foreach ($this->simpleTypeCLass[$classType->getName()] as $subname => $subtype) {
                         $docblock->addVar($subname, $subtype, 'Value of '.$subname);
                         $function->addParam($subname);
-                        $simpleParams[] = '$'.$subname;
+                        $simpleParams[] = $subname;
                     }
                 } else {
                     $docblock->addVar($name, $this->getType($classType->getName(), $classType->getNamespace()), 'Value of '.$name);
@@ -592,15 +598,19 @@ class Generator
                     $params[] = '$'.$name;
                 }
             }
-            $childBody = count($simpleParams) > 0
-                ? array (
-                    '$request = new '.$requestModel.'('.implode(', ', $simpleParams).');',
-                    'return parent::_'.$methodName.'($request);',
-                )
-                : array (
-                    '$response = parent::_'.$methodName.'('.implode(', ', $params).');',
-                    'return $response;',
+            $childBody = array (
+                '$response = parent::_'.$methodName.'('.implode(', ', $params).');',
+                'return $response;',
+            );
+            if (count($simpleParams) > 0) {
+                $childBody = array (
+                    '$request = new '.$requestModel.'();',
                 );
+                foreach ($simpleParams as $simpleParam) {
+                    $childBody[] =  '$request->'.$simpleParam.'= $'.$simpleParam.';';
+                }
+                $childBody[] = 'return parent::_'.$methodName.'($request);';
+            }
 
             $content = $isChild === true
                 ? $childBody
@@ -678,10 +688,10 @@ class Generator
      */
     protected function addConstructFromDefinition(Classes $class, $definition)
     {
-        if (!isset($definition['all'])) {
+        if (!isset($definition['mandatory'])) {
             return $this;
         }
-        if (count($definition['all']) > 0) {
+        if (count($definition['mandatory']) > 0) {
             $content = array();
             $docblock = new Docblock();
             $docblock->setDescription('Construct '.$class->getName());
@@ -690,7 +700,7 @@ class Generator
             $function->setDocblock($docblock);
             $function->isPublic(true);
             $function->setName('__construct');
-            foreach ($definition['all'] as $name => $infos) {
+            foreach ($definition['mandatory'] as $name => $infos) {
                 $docblock->addParam('return', 'void');
                 $docblock->addVar($name, $this->getType($infos['type'], $class->getNamespace()), 'Value of '.$name);
                 $function->addParam($name.' = null', $this->getArgType($infos['type'], $class->getNamespace()));
@@ -860,6 +870,28 @@ class Generator
                 }
 
             }
+
+            if ($element->getElementsByTagName('any')->length > 0) {
+                $anyAttribute = $element->getElementsByTagName('any')->item(0);
+                $anyInfo = array (
+                    'mandatory'  => $this->isValid($anyAttribute, 'minOccurs', '1'),
+                    'type'       => '\SoapVar',
+                    'collection' => $this->isValid($anyAttribute, 'maxOccurs', 'unbounded'),
+                    'nullable'   => $this->isValid($anyAttribute, 'nillable', 'true'),
+                );
+                $params['all']['any'] = $anyInfo;
+                $params['mandatory'] = array();
+                if ($this->isValid($anyAttribute, 'minOccurs', '1')) {
+                    $params['mandatory']['any'] = $infos;
+                }
+            }
+
+            if ($element->getElementsByTagName('extension')->length > 0) {
+                $extention = $element->getElementsByTagName('extension')->item(0);
+                $parentType = explode(':', $extention->getAttribute('base'));
+                $params['extends'] = $parentType[1];
+            }
+
             $types[$element->getAttribute('name')] = $params;
         }
         return $types;
@@ -935,6 +967,7 @@ class Generator
             case 'string':
             case 'array':
             case 'boolean':
+            case '\SoapVar':
                 return $type;
             case 'long':
                 return 'int';
@@ -965,6 +998,7 @@ class Generator
             case 'int':
             case 'float':
             case 'date':
+            case '\SoapVar':
                 return true;
             default:
                 return false;
