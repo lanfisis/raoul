@@ -859,7 +859,7 @@ class Generator
                 $type = explode(':', $attribute->getAttribute('type'));
                 $infos = array (
                     'mandatory'  => $this->isValid($attribute, 'minOccurs', '1'),
-                    'type'       => $this->isValid($attribute, 'maxOccurs', 'unbounded') ? 'array' : $type[1],
+                    'type'       => $this->isValid($attribute, 'maxOccurs', 'unbounded') ? ucfirst($type[1]).'[]' : ucfirst($type[1]),
                     'collection' => $this->isValid($attribute, 'maxOccurs', 'unbounded'),
                     'nullable'   => $this->isValid($attribute, 'nillable', 'true'),
                 );
@@ -1015,6 +1015,7 @@ class Generator
      */
     protected function getArgType($type, $namespace = null)
     {
+        $type = substr($type, -2) == '[]' ? 'array' : $type;
         $formated = $this->getType($type, $namespace);
         if (!in_array($formated, array('int', 'string', 'array', 'boolean'))) {
             return $formated;

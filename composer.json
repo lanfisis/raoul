@@ -12,8 +12,15 @@
         }
     ],
     "require": {
-        "php": ">=5.4.0"
+        "php": ">=5.4.0",
+        "lanfisis/deflection": "dev-master"
     },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url":  "git@github.com:lanfisis/deflection.git"
+        }
+    ],
     "autoload": {
         "psr-0": { "Raoul": "src/" }
     }

@@ -1,0 +1,10 @@
+*.iml
+.idea/
+wsdl/
+lib/
+index.php
+composer.lock
+vendor/
+.DS_Store
+.AppleDouble
+.LSOverride
